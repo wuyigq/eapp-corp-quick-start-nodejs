@@ -1,0 +1,35 @@
+
+                return
+                if (!err2 && body2.department) {
+                    //获取用户详细信息
+                    let len = body2.department.length
+                    let userIds = ""
+                    let userNames = ""
+                    for (let userInfo of body2.department){
+                        console.log(userInfo)
+                        HttpUtils.get("/user/get", {
+                            "access_token": accessToken,
+                            "userid": userInfo.userid,
+                        }, function(err3, body3) {
+                            len --;
+                            if (!err3) {
+                                console.log(body3)
+                                userIds = userIds + body3.userid;
+                                userNames = userNames + body3.name;
+                            } else {
+                                console.err('获取用户信息失败');
+                            }
+                            if (len <= 0) {
+                                res.send({
+                                    result: {
+                                        userId: userIds,
+                                        userName: userNames
+                                    }
+                                });
+                            }
+                        });
+                    }
+                } else {
+                    res.send('获取用户id失败')
+                    console.err('获取用户id失败');
+                }
