@@ -195,7 +195,6 @@ app.use('/login', function(req, res) {
                     res.send('获取role列表为空或失败')
                     console.err('获取role列表为空或失败');
                 }
-                
             });
         } else {
             res.send('获取access_token失败')
