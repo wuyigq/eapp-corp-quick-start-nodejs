@@ -1,35 +1,42 @@
 
-                return
-                if (!err2 && body2.department) {
-                    //获取用户详细信息
-                    let len = body2.department.length
-                    let userIds = ""
-                    let userNames = ""
-                    for (let userInfo of body2.department){
-                        console.log(userInfo)
-                        HttpUtils.get("/user/get", {
-                            "access_token": accessToken,
-                            "userid": userInfo.userid,
-                        }, function(err3, body3) {
-                            len --;
-                            if (!err3) {
-                                console.log(body3)
-                                userIds = userIds + body3.userid;
-                                userNames = userNames + body3.name;
-                            } else {
-                                console.err('获取用户信息失败');
-                            }
-                            if (len <= 0) {
-                                res.send({
-                                    result: {
-                                        userId: userIds,
-                                        userName: userNames
-                                    }
-                                });
-                            }
-                        });
-                    }
-                } else {
-                    res.send('获取用户id失败')
-                    console.err('获取用户id失败');
+let analysisAttendances = function(attendances) {
+    let collect = {}
+    for (let userId in attendances) {
+        collect[userId] = {MorningNoSign:[], Late:[], SeriousLate:[], Absenteeism:[], EveningNoSign:[], Early:[], overtimes:0, overtime:0}
+        for (let info of attendances[userId]) {
+            let date = new Date(info.workDate)
+            let day = date.getDate()
+            if (info.checkType == "OnDuty") {
+                if (info.timeResult == "NotSigned") {
+                    collect[userId].MorningNoSign.push(day)
+                } else if (info.timeResult == "Late" || info.timeResult == "SeriousLate") {
+                    let diff = info.userCheckTime - info.baseCheckTime
+                    //TODO 9:40，10：30，14：00算迟到
+                    if (diff > 600000) collect[userId][info.timeResult].push({day:diff})
+                } else if (info.timeResult == "Absenteeism") {
+                    collect[userId].Absenteeism.push(day)
                 }
+            } else {
+                if (info.timeResult == "NotSigned") {
+                    collect[userId].EveningNoSign.push(day)
+                } else if (info.timeResult == "Early") {
+                    collect[userId].Early.push(day)
+                } else if (info.timeResult == "Absenteeism") {
+                    collect[userId].Absenteeism.push(day)
+                } else if (info.timeResult == "Normal") {
+                    //20：30算加班--2*60*60*1000
+                    let diff = info.userCheckTime - info.baseCheckTime
+                    if (diff >= 7200000) {
+                        if (collect[userId].overtimes) collect[userId].overtimes++
+                        else collect[userId].overtimes = 1
+
+                        let length = diff / 60000 //unit(minite)
+                        if (collect[userId].overtime) collect[userId].overtime += length
+                        else collect[userId].overtime = length
+                    }
+                }
+            }
+        }
+    }
+    return collect
+}
