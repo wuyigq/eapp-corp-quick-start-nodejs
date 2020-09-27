@@ -9,10 +9,9 @@ var bodyParser = require('body-parser');
 var app = express();
 
 var config = require('./config.default.js');
-const { stringify } = require('querystring');
-const { endianness } = require('os');
-const { off } = require('process');
+var nodeExcel = require('excel-export');
 
+app.use(express.static(path.join(__dirname, 'public')))
 app.use(logger('dev'));
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({
@@ -21,6 +20,7 @@ app.use(bodyParser.urlencoded({
 app.use(cookieParser());
 
 let HttpUtils = new httpReq(config.oapiHost);
+let title = ""
 
 const formatNumber = (num) => {
 	num = num.toString()
@@ -124,6 +124,7 @@ let getAllAttendances = function(userIds, accessToken, callback){
 
     let date = new Date(), y = date.getFullYear(), m = date.getMonth();
     let year_month = y + "-" + formatNumber(m+1)
+    title = year_month
     let lastDay = new Date(y, m + 1, 0);
     let maxDay = parseInt(lastDay.getDate())
 
@@ -181,7 +182,7 @@ let analysisAttendances = function(attendances) {
                 } else if (info.timeResult == "Late" || info.timeResult == "SeriousLate") {
                     let diff = (info.userCheckTime - info.baseCheckTime)/6000
                     //TODO 9:40，10：30，14：00算迟到
-                    if (diff > 10) col[info.timeResult].push({[day]:diff})
+                    if (diff > 10) col.Late.push([day, diff])
                 } else if (info.timeResult == "Absenteeism") {
                     col.Absenteeism.push(day)
                 }
@@ -209,16 +210,96 @@ let analysisAttendances = function(attendances) {
     return collect
 }
 
-let getForm = function(data) {
-    let body = '<tr>\
-    <td>row 1, cell 1</td>\
-    <td>row 1, cell 2</td>\
-    </tr>\
-    <tr>\
-    <td>row 2, cell 1</td>\
-    <td>row 2, cell 2</td>\
-    </tr>'
-    return '<html><title></title><body><table border="1"></table>' + body + '</table></body></html>'
+const disableLayout ={layout: false};
+
+let getUserInfo = function(userId) {
+    return {department:userId, name:""}
+}
+
+// disable interface layout.hbs  user config layout: false
+let genExcelConfig = function(data, res) {
+    var conf ={};
+    conf.stylesXmlFile = "styles.xml";
+    conf.name = title;
+    conf.cols = [
+    {
+        caption:'部门（组）',
+        type:'string',
+        width:28.7109375
+    },{
+        caption:'姓名',
+        type:'string',
+        width:28.7109375
+    },{
+        caption:'加班次数',
+        type:'number',
+        width:28.7109375
+    },{
+        caption:'加班时长（小时）',
+        type:'nubmer',
+        width:28.7109375
+    },{
+        caption:'加班排行',
+        type:'number',
+        width:28.7109375
+    },{
+        caption:'迟到次数',
+        type:'number',
+        width:28.7109375
+    },{
+        caption:'迟到总时（分钟）',
+        type:'number',
+        width:28.7109375
+    },{
+        caption:'迟到明细（分钟）',
+        type:'string',
+        width:28.7109375
+    },{
+        caption:'迟到分析',
+        type:'number',
+        width:28.7109375
+    },{
+        caption:'请假明细/备注',
+        type:'string',
+        width:28.7109375
+    },{
+        caption:'考勤扣款',
+        type:'number',
+        width:28.7109375
+    }];
+    let overtime = []
+    for (let userId in data) {
+        let attend = data[userId]
+        overtime.push({time:attend.overtime, userId:userId})
+    }
+    overtime.sort(function(a, b){
+        return b.overtime - a.overtime
+    })
+    for (let index in overtime) {
+        let userId = overtime[index].userId
+        let attend = data[userId]
+        attend.overOrder = index
+    }
+    let rows = []
+    for (let userId in data) {
+        let attend = data[userId]
+        let lateDetail = ""
+        let len = attend.Late.length
+        let count = 0
+        let over1HTime = 0
+        let userInfo = getUserInfo(userId)
+        for (let i in attend.Late) {
+            let late = attend.Late[i]
+            lateDetail = lateDetail + late[0] + ":" + late[1]
+            if (i < len - 1) lateDetail = lateDetail+ "; "
+            count += late[1]
+            if (late[1] >= 60) over1HTime++
+        }
+        let offDetail = 'todo'
+        rows.push([userInfo.department, userInfo.name, attend.overtimes, attend.overtime/60, attend.overOrder, len, count, lateDetail, over1HTime, offDetail, 0])
+    }
+    conf.rows = rows
+    return conf
 }
 
 // 获取用户信息
@@ -234,11 +315,16 @@ app.use('/login', function(req, res) {
             if (userIds.length == 0) return res.send('获取员工列表为空或失败')
             getAllAttendances(userIds, accessToken, function(attendances) {
                 if (attendances.length == 0) return res.send('获取员工列表为空或失败')
-                let ret = analysisAttendances(attendances)                            
-                res.send(ret);
+                let data = analysisAttendances(attendances)
+
+                let conf = genExcelConfig(data)
+                let excel = nodeExcel.execute(conf)
+                res.setHeader('Content-Type', 'application/vnd.openxmlformats');
+                res.setHeader("Content-Disposition", "attachment; filename=" + "Report.xlsx");
+                res.end(excel, 'binary');
             })
         }
-        if (1+1 == 20) {
+        if (1+1 == 2) {
             getAllUsers(accessToken, userCb, 0)
         } else {
             getDepartmentList(accessToken, 0, function(err2, body2) {
@@ -274,15 +360,11 @@ app.use('/login', function(req, res) {
      });
 });
 
-app.use(function(req, res, next) {
-    let testData = {
+app.use(function(req, res) {
+    let attendances = {
         "010128586128494718": {
             "MorningNoSign": [],
-            "Late": [{
-                "day": 734000
-            }, {
-                "day": 1003000
-            }],
+            "Late": [],
             "SeriousLate": [],
             "Absenteeism": [],
             "EveningNoSign": [],
@@ -292,13 +374,7 @@ app.use(function(req, res, next) {
         },
         "03042027046553": {
             "MorningNoSign": [],
-            "Late": [{
-                "day": 1211000
-            }, {
-                "day": 1117000
-            }, {
-                "day": 1426000
-            }],
+            "Late": [],
             "SeriousLate": [],
             "Absenteeism": [],
             "EveningNoSign": [11, 18, 19, 23],
@@ -309,13 +385,6 @@ app.use(function(req, res, next) {
         "03042027059397": {
             "MorningNoSign": [7, 9],
             "Late": [],
-            "SeriousLate": [{
-                "day": 2936000
-            }, {
-                "day": 2932000
-            }, {
-                "day": 3436000
-            }],
             "Absenteeism": [],
             "EveningNoSign": [7],
             "Early": [],
@@ -324,14 +393,7 @@ app.use(function(req, res, next) {
         },
         "03042027074618": {
             "MorningNoSign": [17],
-            "Late": [{
-                "day": 865000
-            }, {
-                "day": 962000
-            }],
-            "SeriousLate": [{
-                "day": 3142000
-            }],
+            "Late": [],
             "Absenteeism": [18, 24],
             "EveningNoSign": [17],
             "Early": [],
@@ -341,11 +403,6 @@ app.use(function(req, res, next) {
         "0318325952885716": {
             "MorningNoSign": [16],
             "Late": [],
-            "SeriousLate": [{
-                "day": 3376000
-            }, {
-                "day": 2993000
-            }],
             "Absenteeism": [],
             "EveningNoSign": [],
             "Early": [],
@@ -354,20 +411,7 @@ app.use(function(req, res, next) {
         },
         "040122232636428402": {
             "MorningNoSign": [],
-            "Late": [{
-                "day": 979000
-            }, {
-                "day": 1293000
-            }, {
-                "day": 1655000
-            }, {
-                "day": 1544000
-            }, {
-                "day": 1116000
-            }, {
-                "day": 1136000
-            }],
-            "SeriousLate": [],
+            "Late": [],
             "Absenteeism": [],
             "EveningNoSign": [1],
             "Early": [],
@@ -376,18 +420,7 @@ app.use(function(req, res, next) {
         },
         "044709345936237345": {
             "MorningNoSign": [],
-            "Late": [{
-                "day": 1356000
-            }, {
-                "day": 805000
-            }, {
-                "day": 813000
-            }, {
-                "day": 1391000
-            }],
-            "SeriousLate": [{
-                "day": 2343000
-            }],
+            "Late": [],
             "Absenteeism": [],
             "EveningNoSign": [],
             "Early": [],
@@ -397,7 +430,6 @@ app.use(function(req, res, next) {
         "0552431205680361": {
             "MorningNoSign": [],
             "Late": [],
-            "SeriousLate": [],
             "Absenteeism": [],
             "EveningNoSign": [],
             "Early": [],
@@ -406,20 +438,7 @@ app.use(function(req, res, next) {
         },
         "060800203823622783": {
             "MorningNoSign": [],
-            "Late": [{
-                "day": 1851000
-            }, {
-                "day": 931000
-            }, {
-                "day": 735000
-            }, {
-                "day": 1276000
-            }, {
-                "day": 858000
-            }, {
-                "day": 1128000
-            }],
-            "SeriousLate": [],
+            "Late": [],
             "Absenteeism": [5, 7],
             "EveningNoSign": [],
             "Early": [21],
@@ -428,12 +447,7 @@ app.use(function(req, res, next) {
         },
         "062516116326319963": {
             "MorningNoSign": [17],
-            "Late": [{
-                "day": 1464000
-            }, {
-                "day": 1488000
-            }],
-            "SeriousLate": [],
+            "Late": [],
             "Absenteeism": [27],
             "EveningNoSign": [11, 17],
             "Early": [],
@@ -442,10 +456,7 @@ app.use(function(req, res, next) {
         },
         "062950152121550052": {
             "MorningNoSign": [],
-            "Late": [{
-                "day": 731000
-            }],
-            "SeriousLate": [],
+            "Late": [],
             "Absenteeism": [],
             "EveningNoSign": [],
             "Early": [],
@@ -464,12 +475,7 @@ app.use(function(req, res, next) {
         },
         "0832322429646651": {
             "MorningNoSign": [],
-            "Late": [{
-                "day": 1722000
-            }, {
-                "day": 1004000
-            }],
-            "SeriousLate": [],
+            "Late": [],
             "Absenteeism": [],
             "EveningNoSign": [25],
             "Early": [],
@@ -478,16 +484,7 @@ app.use(function(req, res, next) {
         },
         "092617265532539778": {
             "MorningNoSign": [],
-            "Late": [{
-                "day": 1248000
-            }, {
-                "day": 1548000
-            }],
-            "SeriousLate": [{
-                "day": 3289000
-            }, {
-                "day": 2223000
-            }],
+            "Late": [],
             "Absenteeism": [21],
             "EveningNoSign": [],
             "Early": [],
@@ -496,10 +493,7 @@ app.use(function(req, res, next) {
         },
         "102251660824323275": {
             "MorningNoSign": [],
-            "Late": [{
-                "day": 1136000
-            }],
-            "SeriousLate": [],
+            "Late": [],
             "Absenteeism": [],
             "EveningNoSign": [5, 19],
             "Early": [],
@@ -508,12 +502,7 @@ app.use(function(req, res, next) {
         },
         "115768542236772871": {
             "MorningNoSign": [],
-            "Late": [{
-                "day": 815000
-            }, {
-                "day": 863000
-            }],
-            "SeriousLate": [],
+            "Late": [],
             "Absenteeism": [2],
             "EveningNoSign": [],
             "Early": [1],
@@ -522,20 +511,7 @@ app.use(function(req, res, next) {
         },
         "1161123726697591": {
             "MorningNoSign": [],
-            "Late": [{
-                "day": 885000
-            }, {
-                "day": 689000
-            }, {
-                "day": 1007000
-            }, {
-                "day": 1280000
-            }, {
-                "day": 712000
-            }, {
-                "day": 700000
-            }],
-            "SeriousLate": [],
+            "Late": [],
             "Absenteeism": [11],
             "EveningNoSign": [],
             "Early": [],
@@ -554,14 +530,7 @@ app.use(function(req, res, next) {
         },
         "131168321922786815": {
             "MorningNoSign": [],
-            "Late": [{
-                "day": 835000
-            }],
-            "SeriousLate": [{
-                "day": 3246000
-            }, {
-                "day": 3479000
-            }],
+            "Late": [],
             "Absenteeism": [],
             "EveningNoSign": [11],
             "Early": [],
@@ -570,17 +539,7 @@ app.use(function(req, res, next) {
         },
         "1332005102848345": {
             "MorningNoSign": [25],
-            "Late": [{
-                "day": 923000
-            }, {
-                "day": 1138000
-            }, {
-                "day": 1596000
-            }, {
-                "day": 1425000
-            }, {
-                "day": 1202000
-            }],
+            "Late": [],
             "SeriousLate": [{
                 "day": 2608000
             }],
@@ -592,9 +551,7 @@ app.use(function(req, res, next) {
         },
         "152367371740007428": {
             "MorningNoSign": [],
-            "Late": [{
-                "day": 1846000
-            }],
+            "Late": [],
             "SeriousLate": [{
                 "day": 2840000
             }],
@@ -606,9 +563,7 @@ app.use(function(req, res, next) {
         },
         "153541426933676741": {
             "MorningNoSign": [],
-            "Late": [{
-                "day": 1751000
-            }],
+            "Late": [],
             "SeriousLate": [],
             "Absenteeism": [],
             "EveningNoSign": [],
@@ -630,9 +585,7 @@ app.use(function(req, res, next) {
         },
         "176860561939951833": {
             "MorningNoSign": [],
-            "Late": [{
-                "day": 672000
-            }],
+            "Late": [],
             "SeriousLate": [],
             "Absenteeism": [2],
             "EveningNoSign": [],
@@ -642,13 +595,7 @@ app.use(function(req, res, next) {
         },
         "183839184232417645": {
             "MorningNoSign": [],
-            "Late": [{
-                "day": 1726000
-            }, {
-                "day": 1146000
-            }, {
-                "day": 1396000
-            }],
+            "Late": [],
             "SeriousLate": [],
             "Absenteeism": [],
             "EveningNoSign": [],
@@ -678,15 +625,7 @@ app.use(function(req, res, next) {
         },
         "2739174767943071": {
             "MorningNoSign": [],
-            "Late": [{
-                "day": 864000
-            }, {
-                "day": 1342000
-            }, {
-                "day": 1514000
-            }, {
-                "day": 958000
-            }],
+            "Late": [],
             "SeriousLate": [],
             "Absenteeism": [1, 3, 7, 10],
             "EveningNoSign": [],
@@ -696,15 +635,7 @@ app.use(function(req, res, next) {
         },
         "281524142738822940": {
             "MorningNoSign": [15],
-            "Late": [{
-                "day": 1278000
-            }, {
-                "day": 1231000
-            }, {
-                "day": 829000
-            }, {
-                "day": 995000
-            }],
+            "Late": [],
             "SeriousLate": [{
                 "day": 3462000
             }, {
@@ -726,9 +657,7 @@ app.use(function(req, res, next) {
         },
         "304758564120350840": {
             "MorningNoSign": [],
-            "Late": [{
-                "day": 1602000
-            }],
+            "Late": [],
             "SeriousLate": [{
                 "day": 2275000
             }],
@@ -764,9 +693,7 @@ app.use(function(req, res, next) {
         },
         "5202583632375286": {
             "MorningNoSign": [10],
-            "Late": [{
-                "day": 1820000
-            }],
+            "Late": [],
             "SeriousLate": [],
             "Absenteeism": [],
             "EveningNoSign": [],
@@ -777,9 +704,7 @@ app.use(function(req, res, next) {
         "694446491936278009": {
             "MorningNoSign": [],
             "Late": [],
-            "SeriousLate": [{
-                "day": 2901000
-            }],
+            "SeriousLate": [],
             "Absenteeism": [],
             "EveningNoSign": [],
             "Early": [],
@@ -788,9 +713,7 @@ app.use(function(req, res, next) {
         },
         "08240659031136774": {
             "MorningNoSign": [],
-            "Late": [{
-                "day": 1392000
-            }],
+            "Late": [],
             "SeriousLate": [],
             "Absenteeism": [],
             "EveningNoSign": [],
@@ -799,7 +722,12 @@ app.use(function(req, res, next) {
             "overtime": 0
         }
     }
-    res.send(getForm(testData))
+
+    let conf = genExcelConfig(attendances)
+    let excel = nodeExcel.execute(conf)
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats');
+    res.setHeader("Content-Disposition", "attachment; filename=" + "kaoqing.xlsx");
+    res.end(excel, 'binary');
 });
 
 module.exports = app;

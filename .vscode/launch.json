@@ -3,6 +3,24 @@
         {
             "type": "node",
             "request": "launch",
+            "name": "nodemon1",
+            "runtimeExecutable": "nodemon",
+            "args": ["${workspaceRoot}/bin/www"],
+            "restart": true,
+            "protocol": "inspector",    //相当于--inspect了
+            "sourceMaps": true,
+            "console": "integratedTerminal",
+            "internalConsoleOptions": "neverOpen",
+            "runtimeArgs": [    //对应nodemon --inspect之后除了启动文件之外的其他配置
+              "--exec",
+              "babel-node",
+              "--presets",
+              "env"
+            ]
+        },
+        {
+            "type": "node",
+            "request": "launch",
             "name": "nodemon",
             "runtimeExecutable": "nodemon",
             "program": "${workspaceFolder}/app.js",
