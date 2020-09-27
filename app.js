@@ -10,6 +10,7 @@ var app = express();
 
 var config = require('./config.default.js');
 var nodeExcel = require('excel-export');
+const { names } = require('debug');
 
 app.use(express.static(path.join(__dirname, 'public')))
 app.use(logger('dev'));
@@ -27,6 +28,19 @@ const formatNumber = (num) => {
 	return num[1] ? num : '0' + num
 }
 
+let getUserInfo = function(userInfos, userIds, index, accessToken, callback) {
+    HttpUtils.get("/user/get", {
+        "access_token": accessToken,
+        "userid": userIds[index],
+    }, function(err, body) {
+        if (!err && body) {
+            userInfos[body.userid] = body
+        } 
+        if (index == userIds.length - 1) callback && callback(userInfos)
+        else getUserInfo(userInfos, userIds, index+1, accessToken, callback)
+    });
+}
+
 // 获取access_token
 let getToken = function (appkey, appsecret, callback){
     HttpUtils.get("/gettoken", {
@@ -36,69 +50,72 @@ let getToken = function (appkey, appsecret, callback){
 }
 
 //使用智能人事接口获取全部员工列表
-let getAllUsers = function(accessToken, callback, offset, ret){
-    if (ret == undefined) ret = []
+let getAllUsers = function(accessToken, offset, ret, res, callback) {
     HttpUtils.get("/topapi/smartwork/hrm/employee/queryonjob", {
         "access_token": accessToken,
         "status_list": "2,3,5",
         "size": 50,
         "offset": offset,
     }, function(err, body) {
-        if (!err && body && body.result && body.result.data_list){
+        if (!err && body && body.result && body.result.data_list) {
             let len = ret.length
             let data = body.result.data_list
-            for(let i = 0; i < data.length; i++){
+            for(let i = 0; i < data.length; i++) {
                 ret[len+i] = data[i]
             }
         }
-        if (body && body.result && body.result.next_cursor)
-            getAllUsers(accessToken, callback, body.result.next_cursor, ret)
+        if (body && body.errcode != 'ok') {
+            return res.send(body)
+        } else if (body && body.result && body.result.next_cursor)
+            getAllUsers(accessToken, body.result.next_cursor, ret, res, callback)
         else
-            callback && callback(ret)
+            callback && callback(ret, {}, {})
     })
 }
 
 //获取部门列表
-let getDepartmentList = function (accessToken, callback){
+let getDepartmentList = function (accessToken, res, callback) {
     HttpUtils.get("/department/list", {
         "access_token": accessToken,
         "fetch_child": true,
     }, function(err, body) {
-        console.log(body)
         let department = {}
         if (!err && body && body.department) {
-            for (let departs of body.department) {
-
-            }
+            department = body.department
         }
-        callback && callback(department)
+        if (body && body.errcode != 'ok') {
+            return res.send(body)
+        } else if (department.length == 0) 
+            return res.send('获取部门列表为空')
+        else
+            callback && callback(department)
     })
 }
 
-//获取部门列表
-let getUsers = function (roleIds, accessToken, callback){
-    let userIds = []
-    let names = {}
-    let index = 0;
-    let count = roleIds.length
-    for (let id of roleIds){
-        HttpUtils.get("/topapi/role/simplelist", {
-            "access_token": accessToken,
-            "role_id": id,
-        }, function(err, body){
-            count--
-            if (!err && body.result && body.result.list){
-                for (let info of body.result.list){
-                    let userId = info.userid
-                    if (names[userId]) continue
-                    names[userId] = info.name
-                    userIds[index] = info.userid
-                    index ++
-                }
+//获取部门员工列表
+let getDepartmentUsers = function (users, department, index, offset, accessToken, callback) {
+    HttpUtils.get("user/simplelist", {
+        "access_token": accessToken,
+        "department_id": department[index].id,
+        "offset": offset,
+        "size": 100,
+    }, function(err, body) {
+        if (!err && body && body.userlist) {
+            let depart_name = department[index].name
+            for (let info of body.userlist) {
+                users.userIds[info.userId].push(info)
+                users.names[info.userId] = info.name
+                users.departs[info.userId] = depart_name
             }
-            if (count <= 0) callback({"userIds" : userIds, "names" : names}) 
-        })
-    }
+        }
+        if (body && body.hasMore) {
+            getAttendances(users, department, index, offset + 100, accessToken, callback)
+        }else if (index < department.length - 1) {
+            getAttendances(users, department, index+1, 0, accessToken, callback)
+        } else {
+            callback && callback(users)
+        }
+    })
 }
 
 //获取考勤信息
@@ -138,12 +155,12 @@ let getAllAttendances = function(userIds, accessToken, callback){
             requests.push({userIds:userIds, from:dateFrom, to: dateTo})
         }
     }
-    let attendances = {}
-    getAttendances(attendances, requests, 0, accessToken, callback, 0)
+    let attendances = {}//接收返回值，就是回调函数的attendances
+    getAttendances(attendances, requests, 0, 0, accessToken, callback)
 }
 
 //请求一次考勤记录
-let getAttendances = function(attendances, requests, index, accessToken, callback, offset) {
+let getAttendances = function(attendances, requests, index, offset, accessToken, callback) {
     HttpUtils.post("/attendance/list", {"access_token": accessToken}, {
         "workDateFrom": requests[index].from,
         "workDateTo": requests[index].to,
@@ -160,9 +177,9 @@ let getAttendances = function(attendances, requests, index, accessToken, callbac
             }
         }
         if (body && body.hasMore) {
-            getAttendances(attendances, requests, index, accessToken, callback, offset + 50)
+            getAttendances(attendances, requests, index, offset + 50, accessToken, callback)
         }else if (index < requests.length - 1) {
-            getAttendances(attendances, requests, index+1, accessToken, callback, 0)
+            getAttendances(attendances, requests, index+1, 0, accessToken, callback)
         } else {
             callback && callback(attendances)
         }
@@ -210,22 +227,16 @@ let analysisAttendances = function(attendances) {
     return collect
 }
 
-const disableLayout ={layout: false};
-
-let getUserInfo = function(userId) {
-    return {department:userId, name:""}
-}
-
 // disable interface layout.hbs  user config layout: false
-let genExcelConfig = function(data, res) {
+let genExcelConfig = function(data, names, departs) {
     var conf ={};
     conf.stylesXmlFile = "styles.xml";
     conf.name = title;
     conf.cols = [
     {
-        caption:'部门（组）',
+        caption:'部门(组)',
         type:'string',
-        width:28.7109375
+        width:58.7109375
     },{
         caption:'姓名',
         type:'string',
@@ -233,9 +244,9 @@ let genExcelConfig = function(data, res) {
     },{
         caption:'加班次数',
         type:'number',
-        width:28.7109375
+        width:28
     },{
-        caption:'加班时长（小时）',
+        caption:'加班时长(小时)',
         type:'nubmer',
         width:28.7109375
     },{
@@ -247,13 +258,13 @@ let genExcelConfig = function(data, res) {
         type:'number',
         width:28.7109375
     },{
-        caption:'迟到总时（分钟）',
+        caption:'迟到总时(分钟)',
         type:'number',
-        width:28.7109375
+        width:48.7109375
     },{
-        caption:'迟到明细（分钟）',
+        caption:'迟到明细(分钟)',
         type:'string',
-        width:28.7109375
+        width:68.7109375
     },{
         caption:'迟到分析',
         type:'number',
@@ -270,9 +281,9 @@ let genExcelConfig = function(data, res) {
     let overtime = []
     for (let userId in data) {
         let attend = data[userId]
-        overtime.push({time:attend.overtime, userId:userId})
+        overtime.push({overtime:attend.overtime, userId:userId})
     }
-    overtime.sort(function(a, b){
+    overtime = overtime.sort(function(a, b){
         return b.overtime - a.overtime
     })
     for (let index in overtime) {
@@ -287,7 +298,6 @@ let genExcelConfig = function(data, res) {
         let len = attend.Late.length
         let count = 0
         let over1HTime = 0
-        let userInfo = getUserInfo(userId)
         for (let i in attend.Late) {
             let late = attend.Late[i]
             lateDetail = lateDetail + late[0] + ":" + late[1]
@@ -296,7 +306,10 @@ let genExcelConfig = function(data, res) {
             if (late[1] >= 60) over1HTime++
         }
         let offDetail = 'todo'
-        rows.push([userInfo.department, userInfo.name, attend.overtimes, attend.overtime/60, attend.overOrder, len, count, lateDetail, over1HTime, offDetail, 0])
+        let name = names[userId] || "unknown"
+        let department = departs[userId] || "unknown"
+        console.log(department + "|" + name + "|" + attend.overtimes + "|" + (attend.overtime/60).toFixed(2) + "|" + attend.overOrder + "|" + len + "|" + count + "|" + lateDetail + "|" + over1HTime + "|" + offDetail + "|" + 0)
+        rows.push([department, name, attend.overtimes, (attend.overtime/60).toFixed(2), attend.overOrder, len, count, lateDetail, over1HTime, offDetail, 0])
     }
     conf.rows = rows
     return conf
@@ -309,15 +322,15 @@ app.use('/login', function(req, res) {
     getToken(appkey, appsecret, function(err, body) {
 
         if (err) return res.send('获取access_token失败:' + err)
-            
+
         var accessToken = body.access_token;
-        let userCb = function(userIds) {
+        let userCb = function(userIds, names, departs) {
             if (userIds.length == 0) return res.send('获取员工列表为空或失败')
             getAllAttendances(userIds, accessToken, function(attendances) {
                 if (attendances.length == 0) return res.send('获取员工列表为空或失败')
                 let data = analysisAttendances(attendances)
 
-                let conf = genExcelConfig(data)
+                let conf = genExcelConfig(data, names, departs)
                 let excel = nodeExcel.execute(conf)
                 res.setHeader('Content-Type', 'application/vnd.openxmlformats');
                 res.setHeader("Content-Disposition", "attachment; filename=" + "Report.xlsx");
@@ -325,37 +338,24 @@ app.use('/login', function(req, res) {
             })
         }
         if (1+1 == 2) {
-            getAllUsers(accessToken, userCb, 0)
-        } else {
-            getDepartmentList(accessToken, 0, function(err2, body2) {
-                return;
-                if (!err2 && body2.result && body2.result.list) {
-                    let roleIds = []
-                    let index = 0;
-                    for (let groups of body2.result.list) {
-                        for (let info of groups.roles) {
-                            roleIds[index] = info.id
-                            index++
-                        }
-                    }
-                    console.log('-----------roleIds--------\n')
-                    console.log(roleIds)
-                    if (roleIds.length == 0) {
-                        res.send('获取role列表为空')
-                        return
-                    }
-                    getUsers(roleIds, accessToken, function(users) {
-                        console.log('-----------users--------\n')
-                        console.log(users)
-                            // userCb(users.userIds)
-                    })
-                } if (err2) {
-                    res.send('获取role列表失败:' + err2)
-                } else {
-                    console.log(body2)
-                    res.send('获取role列表为空')
-                }
+            getDepartmentList(accessToken, res, function(department) {
+                let retVal = {userIds:[], names:{}, departs:{}}//接收返回值，就是回调函数的users
+                getDepartmentUsers(retVal, department, 0, 0, accessToken, function(users) {
+                    userCb(users.userIds, users.names, users.departs)
+                })
             });
+        } else {
+            getAllUsers(accessToken, 0, [], res, function(userIds) {
+                getUserInfo({}, userIds, 0, accessToken, function(userInfos) {
+                    let names = {}
+                    let departs = {}
+                    for (let info of userInfos) {
+                        names[info.userid] = info.name
+                        // departs[info.userid] = info.name //TODO
+                    }
+                    userCb(userIds, names, departs)
+                })
+            })
         }
      });
 });
@@ -723,7 +723,7 @@ app.use(function(req, res) {
         }
     }
 
-    let conf = genExcelConfig(attendances)
+    let conf = genExcelConfig(attendances, {}, {})
     let excel = nodeExcel.execute(conf)
     res.setHeader('Content-Type', 'application/vnd.openxmlformats');
     res.setHeader("Content-Disposition", "attachment; filename=" + "kaoqing.xlsx");
