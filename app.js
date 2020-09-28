@@ -83,7 +83,7 @@ let getDepartmentList = function (accessToken, res, callback) {
         if (!err && body && body.department) {
             department = body.department
         }
-        if (body && body.errcode != 'ok') {
+        if (body && body.errcode != 0) {
             return res.send(body)
         } else if (department.length == 0) 
             return res.send('获取部门列表为空')
@@ -94,7 +94,7 @@ let getDepartmentList = function (accessToken, res, callback) {
 
 //获取部门员工列表
 let getDepartmentUsers = function (users, department, index, offset, accessToken, callback) {
-    HttpUtils.get("user/simplelist", {
+    HttpUtils.get("/user/simplelist", {
         "access_token": accessToken,
         "department_id": department[index].id,
         "offset": offset,
@@ -103,15 +103,16 @@ let getDepartmentUsers = function (users, department, index, offset, accessToken
         if (!err && body && body.userlist) {
             let depart_name = department[index].name
             for (let info of body.userlist) {
-                users.userIds[info.userId].push(info)
-                users.names[info.userId] = info.name
-                users.departs[info.userId] = depart_name
+                let userId = info.userid
+                users.userIds.push(userId)
+                users.names[userId] = info.name
+                users.departs[userId] = depart_name
             }
         }
         if (body && body.hasMore) {
-            getAttendances(users, department, index, offset + 100, accessToken, callback)
-        }else if (index < department.length - 1) {
-            getAttendances(users, department, index+1, 0, accessToken, callback)
+            getDepartmentUsers(users, department, index, offset + 100, accessToken, callback)
+        } else if (index < department.length - 1) {
+            getDepartmentUsers(users, department, index+1, 0, accessToken, callback)
         } else {
             callback && callback(users)
         }
@@ -178,7 +179,7 @@ let getAttendances = function(attendances, requests, index, offset, accessToken,
         }
         if (body && body.hasMore) {
             getAttendances(attendances, requests, index, offset + 50, accessToken, callback)
-        }else if (index < requests.length - 1) {
+        } else if (index < requests.length - 1) {
             getAttendances(attendances, requests, index+1, 0, accessToken, callback)
         } else {
             callback && callback(attendances)
@@ -197,9 +198,9 @@ let analysisAttendances = function(attendances) {
                 if (info.timeResult == "NotSigned") {
                     col.MorningNoSign.push(day)
                 } else if (info.timeResult == "Late" || info.timeResult == "SeriousLate") {
-                    let diff = (info.userCheckTime - info.baseCheckTime)/6000
+                    let diff = (info.userCheckTime - info.baseCheckTime)/60000
                     //TODO 9:40，10：30，14：00算迟到
-                    if (diff > 10) col.Late.push([day, diff])
+                    if (diff > 10) col.Late.push([day, diff-10])
                 } else if (info.timeResult == "Absenteeism") {
                     col.Absenteeism.push(day)
                 }
@@ -207,13 +208,13 @@ let analysisAttendances = function(attendances) {
                 if (info.timeResult == "NotSigned") {
                     col.EveningNoSign.push(day)
                 } else if (info.timeResult == "Early") {
-                    let diff = (info.baseCheckTime - info.userCheckTime)/6000
+                    let diff = (info.baseCheckTime - info.userCheckTime)/60000
                     if (diff > 1) col.Early.push({[day]:diff})
                 } else if (info.timeResult == "Absenteeism") {
                     col.Absenteeism.push(day)
                 } else if (info.timeResult == "Normal") {
                     //20：30算加班--2*60*60*1000
-                    let diff = (info.userCheckTime - info.baseCheckTime)/6000
+                    let diff = (info.userCheckTime - info.baseCheckTime)/60000
                     if (diff >= 120) {
                         col.overtimes++
                         col.overtime += diff
@@ -223,7 +224,6 @@ let analysisAttendances = function(attendances) {
         }
         collect[userId] = col
     }
-    console.log(collect)
     return collect
 }
 
@@ -236,7 +236,7 @@ let genExcelConfig = function(data, names, departs) {
     {
         caption:'部门(组)',
         type:'string',
-        width:58.7109375
+        width:78.7109375
     },{
         caption:'姓名',
         type:'string',
@@ -264,7 +264,7 @@ let genExcelConfig = function(data, names, departs) {
     },{
         caption:'迟到明细(分钟)',
         type:'string',
-        width:68.7109375
+        width:168.7109375
     },{
         caption:'迟到分析',
         type:'number',
@@ -300,7 +300,7 @@ let genExcelConfig = function(data, names, departs) {
         let over1HTime = 0
         for (let i in attend.Late) {
             let late = attend.Late[i]
-            lateDetail = lateDetail + late[0] + ":" + late[1]
+            lateDetail = lateDetail + late[0] + ":" + late[1].toFixed(2)
             if (i < len - 1) lateDetail = lateDetail+ "; "
             count += late[1]
             if (late[1] >= 60) over1HTime++
@@ -308,15 +308,14 @@ let genExcelConfig = function(data, names, departs) {
         let offDetail = 'todo'
         let name = names[userId] || "unknown"
         let department = departs[userId] || "unknown"
-        console.log(department + "|" + name + "|" + attend.overtimes + "|" + (attend.overtime/60).toFixed(2) + "|" + attend.overOrder + "|" + len + "|" + count + "|" + lateDetail + "|" + over1HTime + "|" + offDetail + "|" + 0)
-        rows.push([department, name, attend.overtimes, (attend.overtime/60).toFixed(2), attend.overOrder, len, count, lateDetail, over1HTime, offDetail, 0])
+        rows.push([department, name, attend.overtimes, (attend.overtime/60).toFixed(2), attend.overOrder, len, count.toFixed(2), lateDetail, over1HTime, offDetail, 0])
     }
     conf.rows = rows
     return conf
 }
 
 // 获取用户信息
-app.use('/login', function(req, res) {
+app.use('/kaoqin', function(req, res) {
     let appkey = config.appkey
     let appsecret = config.appsecret
     getToken(appkey, appsecret, function(err, body) {
@@ -333,7 +332,7 @@ app.use('/login', function(req, res) {
                 let conf = genExcelConfig(data, names, departs)
                 let excel = nodeExcel.execute(conf)
                 res.setHeader('Content-Type', 'application/vnd.openxmlformats');
-                res.setHeader("Content-Disposition", "attachment; filename=" + "Report.xlsx");
+                res.setHeader("Content-Disposition", "attachment; filename=" + "kaoqin.xlsx");
                 res.end(excel, 'binary');
             })
         }
