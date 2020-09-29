@@ -11,6 +11,7 @@ var app = express();
 var config = require('./config.default.js');
 var nodeExcel = require('excel-export');
 const { names } = require('debug');
+const e = require('express');
 
 app.use(express.static(path.join(__dirname, 'public')))
 app.use(logger('dev'));
@@ -28,6 +29,57 @@ const formatNumber = (num) => {
 	return num[1] ? num : '0' + num
 }
 
+//将一维数组，以length为长度进行切割
+let spliteArray = function(arr, length){
+    let len = arr.length
+    if (len <= length || length <= 0) 
+        return [arr]
+
+    let ret = []
+    let index = 0
+    for(let i = 0; i<len; i++) {
+        if (i%length == 0) {
+            ret[index] = [arr[i]]
+            index++
+        } else {
+            ret[index].push(arr[i])
+        }
+    }
+    return ret
+}
+
+//获取请假信息
+let getLeaveInfo = function(leaves, userIds, index, offset, accessToken, callback) {
+    let date = new Date(), y = date.getFullYear(), m = date.getMonth()
+    let start_time = new Date(y, m, 0).valueOf()
+    let end_time = new Date(y, m + 1, 0).valueOf()
+
+    HttpUtils.get("/topapi/attendance/getleavestatus", {
+        "access_token": accessToken,
+        "userid": userIds[index],
+        "start_time": start_time,
+        "end_time": end_time,
+        "offset": offset,
+        "size": 20,
+    }, function(err, body) {
+        console.log(body)
+        if (!err && body && body.result && body.result.leave_status) {
+            for (let info of body.result.leave_status) {
+                if (!leaves[info.userid]) leaves[info.userid] = []
+                leaves[info.userid].push(info)
+            }
+        } 
+        if (body && body.result && body.result.has_more == true) {
+            getLeaveInfo(leaves, userIds, index, offset+20, accessToken, callback)
+        } else if (!err && index < userIds.length - 1) {
+            getLeaveInfo(leaves, userIds, index+1, offset, accessToken, callback)
+        } else {
+            callback && callback(leaves)
+        } 
+    });
+}
+
+//获取个人信息
 let getUserInfo = function(userInfos, userIds, index, accessToken, callback) {
     HttpUtils.get("/user/get", {
         "access_token": accessToken,
@@ -120,27 +172,8 @@ let getDepartmentUsers = function (users, department, index, offset, accessToken
 }
 
 //获取考勤信息
-let getAllAttendances = function(userIds, accessToken, callback){
-    let uids;
-    let len = userIds.length
-    if (len <= 50) uids = [userIds]
-    else{
-        uids = []
-        let index = 0
-        for(let i = 0; i++; i<len){
-            if (i%50 == 0){
-                uids[index] = [userIds[i]]
-                index++
-            } else {
-                uids[index].push(userIds[i])
-            }
-        }
-    }
-    
-    let length = uids.length
-    if (length == 0) callback && callback()
-
-    let date = new Date(), y = date.getFullYear(), m = date.getMonth()-1
+let getAllAttendances = function(uids, accessToken, callback){
+    let date = new Date(), y = date.getFullYear(), m = date.getMonth()
     let year_month = y + "-" + formatNumber(m+1)
     title = year_month
     let lastDay = new Date(y, m + 1, 0);
@@ -187,10 +220,10 @@ let getAttendances = function(attendances, requests, index, offset, accessToken,
     })
 }
 
-let analysisAttendances = function(attendances) {
+let analysisAttendances = function(attendances, names) {
     let collect = {}
     for (let userId in attendances) {
-        let col = {MorningNoSign:[], Late:[], SeriousLate:[], Absenteeism:[], EveningNoSign:[], Early:[], overtimes:0, overtime:0}
+        let col = {MorningNoSign:[], Late:[], SeriousLate:[], Absenteeism:[], EveningNoSign:[], Early:[], Approve:[], overtimes:0, overtime:0}
         for (let info of attendances[userId]) {
             let date = new Date(info.workDate)
             let day = date.getDate()
@@ -199,8 +232,14 @@ let analysisAttendances = function(attendances) {
                     col.MorningNoSign.push(day)
                 } else if (info.timeResult == "Late" || info.timeResult == "SeriousLate") {
                     let diff = (info.userCheckTime - info.baseCheckTime)/60000
-                    //TODO 9:40，10：30，14：00算迟到
-                    if (diff > 10) col.Late.push([day, diff-10])
+                    
+                    let date1 = new Date(info.baseCheckTime)
+                    let date2 = new Date(info.userCheckTime)
+                    let name = names[userId] || "unknown"
+                    console.log('Late-name:' +name+'-date1:' + date1.toString()+'-date2:' + date2.toString())
+                    //9:30-9:40，不算迟到，排除
+                    let timeDiff = date1.getHours() == 9 ? 10 : 0
+                    col.Late.push([day, diff-timeDiff])
                 } else if (info.timeResult == "Absenteeism") {
                     col.Absenteeism.push(day)
                 }
@@ -227,8 +266,21 @@ let analysisAttendances = function(attendances) {
     return collect
 }
 
-// disable interface layout.hbs  user config layout: false
-let genExcelConfig = function(data, names, departs) {
+// 请假信息
+let analysisLeave = function(data) {
+    let ret = ''
+    for (let info of data) {
+        if (info.duration_unit == "percent_day") {
+            ret = ret + (info.duration_percent/100).toFixed(2) + "天" 
+        } else if (info.duration_unit == "percent_hour") {
+            ret = ret + (info.duration_percent/100).toFixed(2) + "小时" 
+        }
+    }
+    return ret
+}
+
+// disble interfaace layout.hbs  user config layout: false
+let genExcelConfig = function(data, names, departs, leaves) {
     var conf ={};
     conf.stylesXmlFile = "styles.xml";
     conf.name = title;
@@ -236,54 +288,54 @@ let genExcelConfig = function(data, names, departs) {
     {
         caption:'部门(组)',
         type:'string',
-        width:78.7109375
+        width:28
     },{
         caption:'姓名',
         type:'string',
-        width:28.7109375
+        width:10
     },{
         caption:'加班次数',
         type:'number',
-        width:28
+        width:10
     },{
         caption:'加班时长(小时)',
-        type:'nubmer',
-        width:28.7109375
+        type:'string',
+        width:15
     },{
         caption:'加班排行',
         type:'number',
-        width:28.7109375
+        width:8
     },{
         caption:'迟到次数',
         type:'number',
-        width:28.7109375
+        width:8
     },{
         caption:'迟到总时(分钟)',
         type:'number',
-        width:48.7109375
+        width:15
     },{
         caption:'迟到明细(分钟)',
         type:'string',
-        width:168.7109375
+        width:40
     },{
         caption:'迟到分析',
         type:'number',
-        width:28.7109375
+        width:28
     },{
         caption:'请假明细/备注',
         type:'string',
-        width:28.7109375
+        width:28
     },{
         caption:'考勤扣款',
         type:'number',
-        width:28.7109375
+        width:28
     }];
     let overtime = []
     for (let userId in data) {
         let attend = data[userId]
         overtime.push({overtime:attend.overtime, userId:userId})
     }
-    overtime = overtime.sort(function(a, b){
+    overtime = overtime.sort(function(a, b) {
         return b.overtime - a.overtime
     })
     for (let index in overtime) {
@@ -294,21 +346,31 @@ let genExcelConfig = function(data, names, departs) {
     let rows = []
     for (let userId in data) {
         let attend = data[userId]
-        let lateDetail = ""
         let len = attend.Late.length
-        let count = 0
-        let over1HTime = 0
+        let totalLate = 0//迟到总时长，不包含三次迟到机会的
+        let lateDetail = "" //所有迟到的详情day:time;day:time;...
+        let effectsLateDetail = ""   //迟到超过1h次数和三次迟到机会外的迟到(影响money的)
+        let lateTimes = 0 //1H以内的迟到次数，用来计算lateDetail和考勤扣款
         for (let i in attend.Late) {
             let late = attend.Late[i]
-            lateDetail = lateDetail + late[0] + ":" + late[1].toFixed(2)
-            if (i < len - 1) lateDetail = lateDetail+ "; "
-            count += late[1]
-            if (late[1] >= 60) over1HTime++
+            let time = Math.floor(late[1])
+
+            if (late[1] < 60) lateTimes ++
+
+            effectsLateDetail = effectsLateDetail + late[0] + "日:" + time + "分钟"
+
+            if (late[1] >= 60 || lateTimes > 3) {
+                totalLate += time
+            
+                lateDetail = lateDetail + late[0] + "日:" + time + "分钟"
+                if (i < len - 1) lateDetail = lateDetail+ "; "
+            }
         }
-        let offDetail = 'todo'
-        let name = names[userId] || "unknown"
         let department = departs[userId] || "unknown"
-        rows.push([department, name, attend.overtimes, (attend.overtime/60).toFixed(2), attend.overOrder+1, len, count.toFixed(2), lateDetail, over1HTime, offDetail, 0])
+        let name = names[userId] || "unknown"
+        let overtimeCnt = Math.floor(attend.overtime/60) + '小时' + attend.overtime%60 + '分钟'
+        let leaveDetail = analysisLeave(leaves[userId])//请假/调休详情
+        rows.push([department, name, attend.overtimes, overtimeCnt, attend.overOrder+1, len, totalLate, lateDetail, effectsLateDetail, leaveDetail, 0])
     }
     conf.rows = rows
     return conf
@@ -325,15 +387,18 @@ app.use('/kaoqin', function(req, res) {
         var accessToken = body.access_token;
         let userCb = function(userIds, names, departs) {
             if (userIds.length == 0) return res.send('获取员工列表为空或失败')
-            getAllAttendances(userIds, accessToken, function(attendances) {
-                if (attendances.length == 0) return res.send('获取员工列表为空或失败')
-                let data = analysisAttendances(attendances)
-
-                let conf = genExcelConfig(data, names, departs)
-                let excel = nodeExcel.execute(conf)
-                res.setHeader('Content-Type', 'application/vnd.openxmlformats');
-                res.setHeader("Content-Disposition", "attachment; filename=kaoqin-" + title + ".xlsx");
-                res.end(excel, 'binary');
+            let uids = spliteArray(userIds, 50)
+            getLeaveInfo({}, uids, 0, accessToken, function(leaves) {
+                getAllAttendances(uids, accessToken, function(attendances) {
+                    if (attendances.length == 0) return res.send('获取员工列表为空或失败')
+                    let data = analysisAttendances(attendances, names, departs)
+    
+                    let conf = genExcelConfig(data, names, departs, leaves)
+                    let excel = nodeExcel.execute(conf)
+                    res.setHeader('Content-Type', 'application/vnd.openxmlformats');
+                    res.setHeader("Content-Disposition", "attachment; filename=kaoqin-" + title + ".xlsx");
+                    res.end(excel, 'binary');
+                })
             })
         }
         if (1+1 == 2) {
