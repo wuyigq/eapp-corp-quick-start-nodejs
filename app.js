@@ -106,6 +106,41 @@ let getProcessInfo = function(processInfos, processIds, index, accessToken, call
     });
 }
 
+//将考勤通过代办发给员工
+let sendAttendences = function(infos, accessToken, callback) {
+    let timestamp = new Date().getTime()
+    for (let info of infos) {
+        sendAttendence(info, accessToken, callback, timestamp)
+    }
+}
+
+//将考勤通过代办发给员工
+let sendAttendence = function(info, accessToken, callback, create_time) {
+    create_time = create_time || (new Date().getTime())
+    let formItemList = [
+        {title:"姓名", content:info.name},
+        {title:"迟到次数", content:info.overtimes},
+        {title:"迟到时长", content:info.overtime},
+        {title:"迟到明细(分钟)", content:info.lateDetail},
+        {title:"迟到/早退/缺勤(去掉3次迟到机会)", content:info.lateDetail},
+        {title:"请假明细/备注", content:info.name},
+        {title:"考勤扣款", content:info.name}
+    ]
+    HttpUtils.post("/topapi/workrecord/add", {"access_token": accessToken}, {
+        "userid": info.userId,
+        "create_time": create_time,
+        "title": "考勤确认",
+        "url": 'TODO',
+        "pcUrl": 'TODO',
+        "formItemList": formItemList,
+        "pc_open_type": 2,
+        "biz_id": 'kaoqin',
+    }, function(err, body) {
+        console.log(body)
+        callback && callback(body)
+    });
+}
+
 // 获取access_token
 let getToken = function (appkey, appsecret, callback){
     HttpUtils.get("/gettoken", {
@@ -365,6 +400,7 @@ let genExcelConfig = function(data, names, departs, leaves, processes) {
         attend.overOrder = parseInt(index) + 1
     }
     let rows = []
+    let dddd = []
     for (let userId in data) {
         let attend = data[userId]
         let len = attend.Late.length
@@ -447,8 +483,19 @@ let genExcelConfig = function(data, names, departs, leaves, processes) {
         let collect = effectsLateDetail + earlyDetail + absentDetail
         let leaveDetail = analysisLeave(leaves[userId])//请假/调休详情
         rows.push([department, name, attend.overtimes+'', overtimeCnt, attend.overOrder+'', len+'', totalLate, lateDetail, collect, leaveDetail, 0])
+        dddd.push({userId:userId,
+            department:department,
+            name:name,
+            overtimes:attend.overtimes+'',
+            overtimeCnt:overtimeCnt,
+            overOrder:attend.overOrder+'',
+            LateCnt:len+'',
+            totalLate:totalLate,
+            lateDetail:lateDetail, effectsOperate:collect, leaveDetail:leaveDetail, factor:0
+        })
     }
     conf.rows = rows
+    console.log(dddd)
     return conf
 }
 
