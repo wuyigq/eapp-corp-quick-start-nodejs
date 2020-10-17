@@ -97,7 +97,7 @@ let getProcessInfo = function(processInfos, processIds, index, accessToken, call
     HttpUtils.post("/topapi/processinstance/get", {"access_token": accessToken}, {
         "process_instance_id": processIds[index],
     }, function(err, body) {
-        console.log(body)
+        // console.log(body)
         if (!err && body && body.process_instance) {
             processInfos[processIds[index]] = body.process_instance
         } 
@@ -136,7 +136,7 @@ let sendAttendence = function(info, accessToken, callback, create_time) {
         "pc_open_type": 2,
         "biz_id": 'kaoqin',
     }, function(err, body) {
-        console.log(body)
+        // console.log(body)
         callback && callback(body)
     });
 }
@@ -296,11 +296,12 @@ let analysisAttendances = function(attendances, names) {
                 } else if (info.timeResult == "Absenteeism") {
                     col.EveningAbsent.push([day, procInstId])
                 } else if (info.timeResult == "Normal") {
-                    //20：30算加班--2*60*60*1000
+                    //20：00算加班--2*60*60*1000
                     let diff = (info.userCheckTime - info.baseCheckTime)/60000
-                    if (diff >= 120) {
+                    console.log("-------analysisAttendances-------name:"+names[userId]+"---diff:"+diff+"---userCheckTime:"+info.userCheckTime+"---baseCheckTime:"+info.baseCheckTime)
+                    if (diff - 90 >= 0) {
                         col.overtimes++
-                        col.overtime += diff
+                        col.overtime += (diff - 90)
                     }
                 }
             }
@@ -400,7 +401,6 @@ let genExcelConfig = function(data, names, departs, leaves, processes) {
         attend.overOrder = parseInt(index) + 1
     }
     let rows = []
-    let dddd = []
     for (let userId in data) {
         let attend = data[userId]
         let len = attend.Late.length
@@ -483,19 +483,18 @@ let genExcelConfig = function(data, names, departs, leaves, processes) {
         let collect = effectsLateDetail + earlyDetail + absentDetail
         let leaveDetail = analysisLeave(leaves[userId])//请假/调休详情
         rows.push([department, name, attend.overtimes+'', overtimeCnt, attend.overOrder+'', len+'', totalLate, lateDetail, collect, leaveDetail, 0])
-        dddd.push({userId:userId,
-            department:department,
-            name:name,
-            overtimes:attend.overtimes+'',
-            overtimeCnt:overtimeCnt,
-            overOrder:attend.overOrder+'',
-            LateCnt:len+'',
-            totalLate:totalLate,
-            lateDetail:lateDetail, effectsOperate:collect, leaveDetail:leaveDetail, factor:0
-        })
+        // dddd.push({userId:userId,
+        //     department:department,
+        //     name:name,
+        //     overtimes:attend.overtimes+'',
+        //     overtimeCnt:overtimeCnt,
+        //     overOrder:attend.overOrder+'',
+        //     LateCnt:len+'',
+        //     totalLate:totalLate,
+        //     lateDetail:lateDetail, effectsOperate:collect, leaveDetail:leaveDetail, factor:0
+        // })
     }
     conf.rows = rows
-    console.log(dddd)
     return conf
 }
 

@@ -22,7 +22,7 @@ Http.prototype.get = function(path, params, callback) {
         url: url,
         json: true
     };
-    console.log('get ===> ', url, JSON.stringify(obj, null, 4), '<===');
+    // console.log('get ===> ', url, JSON.stringify(obj, null, 4), '<===');
     request(obj, function(err, response, body) {
         callback && callback(err, body);
     });
@@ -36,7 +36,7 @@ Http.prototype.post = function(path, params, postData, callback) {
         body: postData,
         json: true
     };
-    console.log('post ===> ', url, JSON.stringify(obj, null, 4), '<===');
+    // console.log('post ===> ', url, JSON.stringify(obj, null, 4), '<===');
     request(obj, function(err, response, body) {
         callback && callback(err, body);
     });
